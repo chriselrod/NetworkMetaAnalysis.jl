@@ -1,0 +1,13 @@
+name = "NetworkMetaAnalysis"
+uuid = "062293a9-d8a0-42db-911c-65af2c98d09b"
+authors = ["Chris Elrod"]
+version = "0.1.0"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

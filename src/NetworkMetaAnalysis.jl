@@ -1,8 +1,8 @@
 module NetworkMetaAnalysis
 
-using SIMDPirates, ReverseDiffExpressionsBase, PaddedMatrices
+using SIMDPirates, StackPointers, ReverseDiffExpressionsBase, PaddedMatrices
 
-export NetworkMetaAnalysis, RaggedNetwork, OffsetNetwork
+export NetworkMetaAnalysis, RaggedNetwork, GatherNetwork
 
 abstract type AbstractNetwork end
 
@@ -15,25 +15,100 @@ end
 """
 Represents a network as a series of offsets.
 """
-struct OffsetNetwork <: AbstractNetwork
+struct GatherNetwork <: AbstractNetwork
 
 end
 
-abstract type AbstractNetworkEffect{P,T,L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P,T,L}
-struct FixedEffect <: AbstractNetworkEffect{P,T,L}
+abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P, T, L} end
+@inline Base.pointer(ne::AbstractNetworkEffect) = pointer(ne.effect)
 
+abstract type AbstractFixedEffect{S, P, T, L} <: AbstractNetworkEffect{P, T, L} end
+abstract type AbstractRandomEffect{P, T, L} <: AbstractNetworkEffect{P, T, L} end
+struct FixedEffectM{S, P, T, L} <: AbstractFixedEffect{S, P, T, L}
+    effect::FixedSizeVector{P,T,L}
+    μ::FixedSizeVector{S,T,S}
+    σᵦ::T
+end
+struct FixedEffect{S, P, T, L} <: AbstractFixedEffect{S, P, T, L}
+    effect::PtrVector{P,T,L,false}
+    μ::PtrVector{S,T,S}
+    σᵦ::T
+end
+struct RandomEffectM{P, T, L} <: AbstractRandomEffect{P, T, L}
+    effect::FixedSizeVector{P,T,L}
+    σₑ::T
+    σᵦ::T
+end
+struct RandomEffect{P, T, L} <: AbstractRandomEffect{P, T, L}
+    effect::PtrVector{P,T,L,false}
+    σₑ::T
+    σᵦ::T
 end
 
-struct RandomEffect <: AbstractNetworkEffect{P,T,L}
-
+function ragged_network_meta_analysis_quote(
+    israndom::Vector{Bool}, nmodelparams::Int, ntreatments::Int, (efitp, diitp, tritp)::NTuple{3,Bool},
+    transform_v::Vector{Symbol}, arities::Vector{Int}, T, sptr::Bool, partial::Bool
+)
+    q = quote target = zero($T) end
+    if partial
+        diff_partials
+    end
 end
+
+function gather_network_meta_analysis_quote(
+    israndom::Vector{Bool}, nmodelparams::Int, ntreatments::Int, (efitp, diitp, tritp)::NTuple{3,Bool},
+    transform_v::Vector{Symbol}, arities::Vector{Int}, T, sptr::Bool, partial::Bool 
+)
+    q = quote target = zero($T) end
+    
+end
+
+const SUPPORTED_TRANSFORMS = Dict{Symbol,Int}(
+    :ITP => 2,
+    :Eₘₐₓ => 2,
+    :exp => 1,
+    :identity => 1,
+    :* => 1,
+    :logistic => 1
+)
+func_type_to_symbol(@nospecialize(f::Type{<:Function})) =  Symbol(string(f)[8:end-1])
 
 """
 
 """
-function network_meta_analysis_quote()
-
-
+function network_meta_analysis_quote(effects, differences, network, transforms, sptr::Bool = true, partial::Bool = true)
+    effects_is_tuple = effects <: Tuple
+    if effects_is_tuple
+        israndom = Bool[ e <: AbstractRandomEffect for e in effects.parameters ]
+    else
+        israndom = Bool[ e <: AbstractRandomEffect ]
+    end
+    neffects = length(israndom)
+    differences_is_tuple = differences <: Tuple
+    nmodelparams = differences_is_tuple ? length(differences.parameters) : 1
+    # Get the first two parameters of the MutableFixedSizeArray, they are Tuple{dims...}, eltype
+    ntreatments_tup, T = (differences_is_tuple ? first(differences.parameters) : differences).parameters
+    # Assume that length(ntreatments_tup.parameters) == 1, and extract the first element
+    ntreatments = first(ntreatments_tup.parameters)::Int
+    isragged = network <: RaggedNetwork
+    transforms_is_tuple = false
+    transform_v = if transforms === nothing
+        [:identity]
+    elseif transforms <: Tuple
+        transforms_is_tuple = true
+        [func_type_to_symbol(t) for t in transforms.parameters]
+    else
+        [func_type_to_symbol(transforms)]
+    end
+    @assert length(transform_v) == neffects
+    arities = getindex.(SUPPORTED_TRANSFORMS, transform_v)
+    @assert arities == nmodelparams
+    tuple_checks = (effects_is_tuple, differences_is_tuple, transforms_is_tuple)
+    if isragged
+        ragged_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, tuple_checks, transform_v, arities, T, sptr, partial)
+    else
+        gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, tuple_checks, transform_v, arities, T, sptr, partial)
+    end
 end
 
 """
@@ -41,8 +116,16 @@ end
 θ = RandomEffect( effects, δθ, stdev )
 (α,θ) ~ NetworkMetaAnalysis( network, transforms )
 """
-@generated function NetworkMetaAnalysis()
+@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N) where {E,D,N}
+    network_meta_analysis_quote(E, D, N, nothing, sptr = true)
+end
+@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N, transforms::T) where {E,D,N,T}
+    network_meta_analysis_quote(E, D, N, T, sptr = true)
+end
 
+@def_stackpointer_fallback NetworkMetaAnalysis ∂NetworkMetaAnalysis
+function __init__()
+    @add_stackpointer_method NetworkMetaAnalysis ∂NetworkMetaAnalysis
 end
 
 end # module

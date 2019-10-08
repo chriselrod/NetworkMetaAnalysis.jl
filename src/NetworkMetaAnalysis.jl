@@ -16,7 +16,29 @@ end
 Represents a network as a series of offsets.
 """
 struct GatherNetwork <: AbstractNetwork
-
+    arms_and_studies::Matrix{Int}
+    masks::Vector{UInt8}
+    narms::Vector{Int}
+end
+function GatherNetwork(studies, arms)
+    @boundscheck length(studies) == length(arms) || throw("There should be one study ID per arm.")
+    if !issorted(studies)
+        studies_sp = sortperm(studies)
+        studies = studies[studies_sp]
+        arms = arms[studies_sp]
+    end
+    arm_ids = sort!(unique(arms))
+    if any(arm_ids .!= 0:length(arm_ids)-1)
+        throw("Write code to fix this.")
+    end
+    study_ids = sort!(unique(studies))
+    if any(study_ids .!= 0:length(studies_ids)-1)
+        throw("Write code to fix this.")
+    end
+    decr = 0
+    for s in 1:last(studies)
+        
+    end
 end
 
 abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P, T, L} end
@@ -111,15 +133,24 @@ function network_meta_analysis_quote(effects, differences, network, transforms, 
     end
 end
 
+
 """
 α = FixedEffect(  baselines, δα )
 θ = RandomEffect( effects, δθ, stdev )
 (α,θ) ~ NetworkMetaAnalysis( network, transforms )
+
+How to pass in additional args?
 """
 @generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N) where {E,D,N}
     network_meta_analysis_quote(E, D, N, nothing, sptr = true)
 end
-@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N, transforms::T) where {E,D,N,T}
+@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N) where {E,D,N}
+    network_meta_analysis_quote(E, D, N, nothing, sptr = true)
+end
+@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N, outtransforms::OT) where {E,D,N,OT}
+    network_meta_analysis_quote(E, D, N, nothing, sptr = true)
+end
+@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N, outtransforms::OT) where {E,D,N,IT,OT}
     network_meta_analysis_quote(E, D, N, T, sptr = true)
 end
 

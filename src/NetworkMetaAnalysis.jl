@@ -1,6 +1,7 @@
 module NetworkMetaAnalysis
 
-using SIMDPirates, StackPointers, ReverseDiffExpressionsBase, PaddedMatrices
+using VectorizationBase, SIMDPirates,
+    StackPointers, PaddedMatrices, ReverseDiffExpressionsBase
 
 export NetworkMetaAnalysis, RaggedNetwork, GatherNetwork
 
@@ -12,33 +13,157 @@ Represents a network as a ragged matrix.
 struct RaggedNetwork <: AbstractNetwork
 
 end
+
+"""
+Used for sorting sets of values together without using sortperm.
+"""
+struct SortingSet{N,T} <: AbstractVector{Tuple{Int,Int,NTuple{N,T}}}
+    x::Vector{Int}
+    y::Vector{Int}
+    z::NTuple{N,Vector{T}}
+end
+Base.size(s::SortingSet) = size(s.x)
+Base.length(s::SortingSet) = length(s.x)
+Base.IndexStyle(::Type{<:SortingSet}) = IndexLinear()
+Base.@propagate_inbounds function Base.getindex(s::SortingSet{N}, i) where {N}
+    (s.x[i], s.y[i], ntuple(n -> s.z[n][i], Val(N)))
+end
+Base.@propagate_inbounds function Base.setindex!(
+    s::SortingSet{N,T}, (x,y,z)::Tuple{Int,Int,NTuple{N,T}}, i
+) where {N,T}
+    (setindex!(s.x, x, i), setindex!(s.y, y, i), ntuple(n -> setindex!(s.z[n], z[n], i), Val(N)))
+end
+
+function sortpermsort(ss::SortingSet{N}) where {N}
+    sp = sortperm(ss.x)
+    SortingSet(
+        ss.x[sp], ss.y[sp],
+        ntuple(n -> ss.z[n][sp], Val(N))
+    )
+end
+Base.Sort.defalg(::SortingSet) = Base.Sort.QuickSortAlg()
+
+
 """
 Represents a network as a series of offsets.
 """
-struct GatherNetwork <: AbstractNetwork
+struct GatherNetwork{U} <: AbstractNetwork
     arms_and_studies::Matrix{Int}
-    masks::Vector{UInt8}
+    masks::Vector{U}
     narms::Vector{Int}
 end
-function GatherNetwork(studies, arms)
-    @boundscheck length(studies) == length(arms) || throw("There should be one study ID per arm.")
-    if !issorted(studies)
-        studies_sp = sortperm(studies)
-        studies = studies[studies_sp]
-        arms = arms[studies_sp]
+
+function count_unique(v::AbstractVector{T}) where {T}
+    d = Dict{T,Int}()
+    for vᵢ ∈ v
+        d[vᵢ] = get(d, vᵢ, 0) + 1
     end
-    arm_ids = sort!(unique(arms))
-    if any(arm_ids .!= 0:length(arm_ids)-1)
-        throw("Write code to fix this.")
+    d
+end
+function count_order_mapping(d::Dict{K,V}, baseline = 1) where {K,V}
+    vk = sort!([(v,k) for (k,v) ∈ d])
+    m = Dict{K,Int}()
+    count = Vector{V}(undef, length(vk))
+    ind = baseline
+    for (v,k) ∈ vk
+        m[k] = ind
+        ind += 1
+        count[ind - baseline] = v
     end
-    study_ids = sort!(unique(studies))
-    if any(study_ids .!= 0:length(studies_ids)-1)
-        throw("Write code to fix this.")
+    m, count
+end
+
+function GatherNetwork(studies, arms, doses...)
+    nstudyarms = length(studies)
+    @boundscheck begin
+        all(d -> length(d) == nstudyarms, doses) || throw("There should be one dose per study ID.")
+        nstudyarms == length(arms) || throw("There should be one study ID per arm.")
     end
-    decr = 0
-    for s in 1:last(studies)
-        
+    arms_per_study = count_unqiue(studies)
+    arm_frequency = count_unique(arms)
+    ss = sort(
+        SortingSet(studies, arms, doses),
+        lt = (s,a) -> isless( # More frequently included treatments (arm freq) go first 
+            (arms_per_study[s[1]],s[1],-arm_frequency[s[2]]),
+            (arms_per_study[a[1]],a[1],-arm_frequency[a[2]])
+        )
+    )
+    study_map, study_count = count_order_mapping(arms_per_study, 1)
+    arm_map, arm_count = count_order_mapping(arm_frequency, -1)
+
+    studies = getindex.(study_map, ss.x)
+    arms = getindex.(arm_map, ss.y)
+    # studies and arms now have the correct ids / names.
+
+    W, Wshift = VectorizationBase.pick_vector_width(Float64)
+    
+    # offsets = Array{Int}( undef, W, ( nstudyarms + W - 1 ) >> Wshift, 2 )
+    # rem = nstudyarms & (W - 1)
+    nstudies = length(study_count)
+    study_rem = nstudies & (W-1)
+    # study_slack = study_rem == 0 ? 0 : W - studyrem
+    study_reps = nstudies >>> Wshift
+
+    study_has_remainder = study_rem != 0
+    if study_has_remainder
+        arms_per_set = Vector{Int}(undef, study_rem + 1)
+        dim2 = study_count[study_rem]
+        arms_per_set[1] = dim2
+        so = W - study_rem
+    else
+        arms_per_set = Vector{Int}(undef, study_rem)
+        dim2 = 0
+        so = 0
     end
+    for i ∈ 1:study_reps
+        sc = study_count[study_rem + (i << Wshift)]
+        dim2 += sc
+        arms_per_set[i + study_has_remainder] = sc
+    end
+    
+    base_mask = VectorizationBase.max_mask(Float64)
+    Vf64 = VectorizationBase.pick_vector(Float64)
+    Vi64 = VectorizationBase.pick_vector(Int64)
+
+    offset_α = Array{Int}(undef, W, dim2, 2) # gives offsets for vectorizing studies
+    offset_δ = Array{Int}(undef, W, dim2) # gives offsets for vectorizing δs, so we can calculate ∂s from stored ∂out∂δ
+    masks = Vector{typeof(base_mask)}(undef, dim2)
+    ptr_counts = pointer(study_count)
+    sizeof_I = sizeof(eltype(study_count))
+    if study_has_remainder
+        ptr_counts -= so*sizeof_I
+    end
+    ind = 1
+    csc = cumsum(study_count)
+    for s in (!study_has_remainder):study_reps
+        if s == 0
+            study_inds = ntuple(w -> (w - so) > 0 ? csc[w - so] : 0, pick_vector_width_val(Float64))
+            mask = base_mask ⊻ ((one(base_mask) << (W-1)) - one(base_mask))
+            narms_vec = vload( Vi64, ptr_counts, mask )
+        else
+            study_inds = ntuple(w -> csc[w - so + (s << Wshift)], pick_vector_width_val(Float64))
+            narms_vec = vload( Vi64, ptr_counts )
+        end
+        narms = arms_per_set[s + study_has_remainder]
+        for a ∈ 1:narms
+            mask = SIMDPirates.vecbool_to_unsigned(
+                SIMDPirates.vgreater_or_equal( narms_vec, vbroadcast(Vi64, a) )
+            )
+            masks[ind] = mask
+            # Fill in offset_α
+            for w in 1:W
+                if (mask & (one(mask) << (w-1))) != zero(mask) # arm present
+                    si = study_inds[w]
+                    study_inds = setindex(study_inds, si + 1, w)
+                    offset_α[w,ind,1] = studies[si]
+                    offset_α[w,ind,2] = arms[si]
+                end
+            end            
+            ind += 1
+        end
+        ptr_counts += W * sizeof(T)
+    end
+    
 end
 
 abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P, T, L} end

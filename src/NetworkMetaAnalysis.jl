@@ -1,17 +1,20 @@
 module NetworkMetaAnalysis
 
-using VectorizationBase, SIMDPirates,
+using VectonnprizationBase, SIMDPirates,
     StackPointers, PaddedMatrices, ReverseDiffExpressionsBase
 
 export NetworkMetaAnalysis, RaggedNetwork, GatherNetwork
 
 abstract type AbstractNetwork end
 
+const W64, Wshift64 = VectorizationBase.pick_vector_width_shift(Float64)
+const MASK_TYPE = VectorizationBase.mask_type(Float64) # UInt8, unless we get something like avx1024.
+
 """
 Represents a network as a ragged matrix.
 """
 struct RaggedNetwork <: AbstractNetwork
-
+    
 end
 
 """
@@ -34,23 +37,106 @@ Base.@propagate_inbounds function Base.setindex!(
     (setindex!(s.x, x, i), setindex!(s.y, y, i), ntuple(n -> setindex!(s.z[n], z[n], i), Val(N)))
 end
 
-function sortpermsort(ss::SortingSet{N}) where {N}
-    sp = sortperm(ss.x)
-    SortingSet(
-        ss.x[sp], ss.y[sp],
-        ntuple(n -> ss.z[n][sp], Val(N))
-    )
-end
 Base.Sort.defalg(::SortingSet) = Base.Sort.QuickSortAlg()
 
 
+struct GatherOffsets
+    offsets::Matrix{Int}#Vector{NTuple{W64,Core.VecElement{Int}}}
+    masks::Vector{MASK_TYPE}
+    nreps::Vector{Int}
+    offset::Int # = rem - W
+    # increment::Vector{Int}
+end
+
+"""
+GatherOffsets( items, counts )
+ - Items, the offsets of the things we wish to load into registers. For example, offsets of arm differences.
+#  - Lanes, the category we wish to divide things by. For example, studies, where we wish to load each arm corresponding to that study in the same lane.
+ - Counts, the number of items corresponding to each lane. For example, the number of arms per study.
+
+counts are counts of the things you wish to load into registers.
+"""
+function GatherOffsets(items, counts, csc = cumsum(counts))
+    
+    ncounts = length(counts)
+    count_rem = ncounts & (W64-1)
+    count_reps = ncounts >>> Wshift64
+
+    count_has_remainder = count_rem != 0
+    if count_has_remainder
+        count_per_lane = Vector{Int}(undef, count_reps + 1)
+        dim2 = counts[count_rem]
+        count_per_lane[1] = dim2
+        offset = count_rem - W64
+    else
+        count_per_lane = Vector{Int}(undef, count_reps)
+        dim2 = 0
+        offset = 0
+    end
+    for i ∈ 1:count_reps
+        c = counts[count_rem + (i << Wshift64)]
+        dim2 += c
+        count_per_lane[i + count_has_remainder] = c
+    end
+    
+    Vf64 = Vec{W64,Float64}
+    Vint = Vec{W64,Int}
+
+    # increment = Vector{Int}(undef, dim2+1); increment[1] = offset
+    # offsets = Vector{NTuple{W64,Core.VecElement{Int}}}(undef, dim2) # gives offsets for vectorizing studies
+    offsets = fill(-Int(999), W64, dim2) # May not need mask vector? mask = offsets >= 0
+    masks = Vector{MASK_TYPE}(undef, dim2)
+    ptr_counts = pointer(counts)
+    sizeof_I = sizeof(eltype(counts))
+    if count_has_remainder
+        ptr_counts += offset*sizeof_I
+    end
+    offset_ptr = reinterpret(Ptr{Int}, pointer(offsets))
+    ind = 1
+    for s ∈ (!count_has_remainder):count_reps
+        if s == 0
+            count_inds = ntuple(w -> (w + offset) > 0 ? csc[w + offset] : 0, Val(W64))
+            mask = VectorizationBase.max_mask(Float64) ⊻ ((one(MASK_TYPE) << (W64-1)) - one(MASK_TYPE))
+            count_vec = vload( Vint, ptr_counts, mask )
+        else
+            count_inds = ntuple(w -> csc[w + offset + (s << Wshift)], Val(W64))
+            count_vec = vload( Vint, ptr_counts )
+        end
+        maxcount = count_per_lane[s + count_has_remainder]
+        for a ∈ 1:maxcount
+            mask = SIMDPirates.vgreater_or_equal_mask( count_vec, vbroadcast(Vint, a) )
+            # Fill in offset_α
+            for w ∈ 0:W64-1
+                flag = one(MASK_TYPE) << w
+                if (mask & flag) != zero(MASK_TYPE) # arm present
+                    i = count_inds[w+1]
+                    count_inds = setindex(count_inds, i+1, w+1)
+                    itemsᵢ = items[i]
+                    # Sentinel value; this is a baseline / something we do not load -> set corresponding mask to 0
+                    if itemsᵢ < 0
+                        mask ⊻= flag
+                    else
+                        VectorizationBase.store!( offset_ptr + w*sizeof(Int), itemsᵢ )
+                    end
+                end
+            end
+            masks[ind] = mask
+            offset_ptr += W64*sizeof(Int)
+            ind += 1
+            # increment[ind] = count_ones(mask) # instruction fast enough that I should use it instead of loading.
+        end
+        ptr_counts += W64 * sizeof(T)
+    end
+    GatherOffsets( offsets, masks, count_per_lane, offset ) # increment )
+end
+
+    
 """
 Represents a network as a series of offsets.
 """
-struct GatherNetwork{U} <: AbstractNetwork
-    arms_and_studies::Matrix{Int}
-    masks::Vector{U}
-    narms::Vector{Int}
+struct GatherNetwork <: AbstractNetwork
+    α::GatherOffsets
+    δ::GatherOffsets
 end
 
 function count_unique(v::AbstractVector{T}) where {T}
@@ -73,6 +159,9 @@ function count_order_mapping(d::Dict{K,V}, baseline = 1) where {K,V}
     m, count
 end
 
+
+
+
 function GatherNetwork(studies, arms, doses...)
     nstudyarms = length(studies)
     @boundscheck begin
@@ -88,82 +177,26 @@ function GatherNetwork(studies, arms, doses...)
             (arms_per_study[a[1]],a[1],-arm_frequency[a[2]])
         )
     )
-    study_map, study_count = count_order_mapping(arms_per_study, 1)
+    study_map, study_count = count_order_mapping(arms_per_study, 0)
     arm_map, arm_count = count_order_mapping(arm_frequency, -1)
 
     studies = getindex.(study_map, ss.x)
     arms = getindex.(arm_map, ss.y)
     # studies and arms now have the correct ids / names.
 
-    W, Wshift = VectorizationBase.pick_vector_width(Float64)
+    study_offsets = GatherOffsets( arms, study_count )
+    # Need to construct study_offset_vec like the arms above; -1 indicates skipping.
     
-    # offsets = Array{Int}( undef, W, ( nstudyarms + W - 1 ) >> Wshift, 2 )
-    # rem = nstudyarms & (W - 1)
-    nstudies = length(study_count)
-    study_rem = nstudies & (W-1)
-    # study_slack = study_rem == 0 ? 0 : W - studyrem
-    study_reps = nstudies >>> Wshift
+    ad = [ sizehint!(Int[], c) for c ∈ arm_count ]
+    for k ∈ 1:length(study_offsets.offset)
+        o = study_offsets.offset[k]
+        o < 0 && continue
+        # o gives the arm
+        push!(ad[o+1], k-1)
+    end
+    arm_offsets = GatherOffsets( vcat(ad...), arm_count )
 
-    study_has_remainder = study_rem != 0
-    if study_has_remainder
-        arms_per_set = Vector{Int}(undef, study_rem + 1)
-        dim2 = study_count[study_rem]
-        arms_per_set[1] = dim2
-        so = W - study_rem
-    else
-        arms_per_set = Vector{Int}(undef, study_rem)
-        dim2 = 0
-        so = 0
-    end
-    for i ∈ 1:study_reps
-        sc = study_count[study_rem + (i << Wshift)]
-        dim2 += sc
-        arms_per_set[i + study_has_remainder] = sc
-    end
-    
-    base_mask = VectorizationBase.max_mask(Float64)
-    Vf64 = VectorizationBase.pick_vector(Float64)
-    Vi64 = VectorizationBase.pick_vector(Int64)
-
-    offset_α = Array{Int}(undef, W, dim2, 2) # gives offsets for vectorizing studies
-    offset_δ = Array{Int}(undef, W, dim2) # gives offsets for vectorizing δs, so we can calculate ∂s from stored ∂out∂δ
-    masks = Vector{typeof(base_mask)}(undef, dim2)
-    ptr_counts = pointer(study_count)
-    sizeof_I = sizeof(eltype(study_count))
-    if study_has_remainder
-        ptr_counts -= so*sizeof_I
-    end
-    ind = 1
-    csc = cumsum(study_count)
-    for s in (!study_has_remainder):study_reps
-        if s == 0
-            study_inds = ntuple(w -> (w - so) > 0 ? csc[w - so] : 0, pick_vector_width_val(Float64))
-            mask = base_mask ⊻ ((one(base_mask) << (W-1)) - one(base_mask))
-            narms_vec = vload( Vi64, ptr_counts, mask )
-        else
-            study_inds = ntuple(w -> csc[w - so + (s << Wshift)], pick_vector_width_val(Float64))
-            narms_vec = vload( Vi64, ptr_counts )
-        end
-        narms = arms_per_set[s + study_has_remainder]
-        for a ∈ 1:narms
-            mask = SIMDPirates.vecbool_to_unsigned(
-                SIMDPirates.vgreater_or_equal( narms_vec, vbroadcast(Vi64, a) )
-            )
-            masks[ind] = mask
-            # Fill in offset_α
-            for w in 1:W
-                if (mask & (one(mask) << (w-1))) != zero(mask) # arm present
-                    si = study_inds[w]
-                    study_inds = setindex(study_inds, si + 1, w)
-                    offset_α[w,ind,1] = studies[si]
-                    offset_α[w,ind,2] = arms[si]
-                end
-            end            
-            ind += 1
-        end
-        ptr_counts += W * sizeof(T)
-    end
-    
+    GatherNetwork( study_offsets, arm_offsets ), ss.z
 end
 
 abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P, T, L} end

@@ -1,11 +1,13 @@
 module NetworkMetaAnalysis
 
-using VectonnprizationBase, SIMDPirates,
+using VectorizationBase, SIMDPirates,
     StackPointers, PaddedMatrices, ReverseDiffExpressionsBase
 
 export NetworkMetaAnalysis, RaggedNetwork, GatherNetwork
 
 abstract type AbstractNetwork end
+abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P, T, L} end
+@inline Base.pointer(ne::AbstractNetworkEffect) = pointer(ne.effect)
 
 const W64, Wshift64 = VectorizationBase.pick_vector_width_shift(Float64)
 const MASK_TYPE = VectorizationBase.mask_type(Float64) # UInt8, unless we get something like avx1024.
@@ -130,7 +132,7 @@ function GatherOffsets(items, counts, csc = cumsum(counts))
     GatherOffsets( offsets, masks, count_per_lane, offset ) # increment )
 end
 
-    
+ 
 """
 Represents a network as a series of offsets.
 """
@@ -199,8 +201,6 @@ function GatherNetwork(studies, arms, doses...)
     GatherNetwork( study_offsets, arm_offsets ), ss.z
 end
 
-abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P, T, L} end
-@inline Base.pointer(ne::AbstractNetworkEffect) = pointer(ne.effect)
 
 abstract type AbstractFixedEffect{S, P, T, L} <: AbstractNetworkEffect{P, T, L} end
 abstract type AbstractRandomEffect{P, T, L} <: AbstractNetworkEffect{P, T, L} end
@@ -299,22 +299,22 @@ end
 
 How to pass in additional args?
 """
-@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N) where {E,D,N}
+@generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N) where {E,D,N}
     network_meta_analysis_quote(E, D, N, nothing, sptr = true)
 end
-@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N) where {E,D,N}
+@generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N) where {E,D,IT,N}
     network_meta_analysis_quote(E, D, N, nothing, sptr = true)
 end
-@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N, outtransforms::OT) where {E,D,N,OT}
+@generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N, outtransforms::OT) where {E,D,N,OT}
     network_meta_analysis_quote(E, D, N, nothing, sptr = true)
 end
-@generated function NetworkMetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N, outtransforms::OT) where {E,D,N,IT,OT}
+@generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N, outtransforms::OT) where {E,D,N,IT,OT}
     network_meta_analysis_quote(E, D, N, T, sptr = true)
 end
 
-@def_stackpointer_fallback NetworkMetaAnalysis ∂NetworkMetaAnalysis
+@def_stackpointer_fallback MetaAnalysis ∂MetaAnalysis
 function __init__()
-    @add_stackpointer_method NetworkMetaAnalysis ∂NetworkMetaAnalysis
+    @add_stackpointer_method MetaAnalysis ∂MetaAnalysis
 end
 
 end # module

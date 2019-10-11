@@ -41,13 +41,26 @@ end
 
 Base.Sort.defalg(::SortingSet) = Base.Sort.QuickSortAlg()
 
-
-struct GatherOffsets
+# R is either nothing, indicating that nreps is a vector
+# where each element is a number of arms, so [2, 3, 3, 4] means
+# offsets consists of sets of:
+# 2 arms, 3 arms, 3 arms, and then 4 arms.
+# If R is a tuple, nreps is a vector of the same length as the tuple.
+# The tuple holds the number of arms, and nreps the number of reptitions.
+# For example, R = (2,3,4) and nreps = [1,2,1] is equivalent to
+# R === nothing, nreps = [2,3,3,4].
+struct GatherOffsets{R}
     offsets::Matrix{Int}#Vector{NTuple{W64,Core.VecElement{Int}}}
     masks::Vector{MASK_TYPE}
     nreps::Vector{Int}
     offset::Int # = rem - W
     # increment::Vector{Int}
+end
+
+function GatherOffsets(
+    offsets::Matrix{Int}, masks::Vector{MASK_TYPE}, nreps::Vector{Int}, offset::Int
+)
+    GatherOffsets{nothing}(offsets, masks, nreps, offset)
 end
 
 function cumsum0(x::AbstractArray{T}) where {T}
@@ -68,7 +81,7 @@ end
 
 # counts are counts of the things you wish to load into registers.
 # """
-function GatherOffsets(items, counts, csc = cumsum0(counts))
+function GatherOffsets(items, counts, csc = cumsum0(counts))# where {R}
     # @show items'
     # @show counts'
     # @show csc
@@ -87,7 +100,7 @@ function GatherOffsets(items, counts, csc = cumsum0(counts))
         dim2 = 0
         # offset = 0
     end
-    offset = count_rem - W64
+    offset = W64 - count_rem
     for i ∈ 1:count_reps
         c = counts[count_rem + (i << Wshift64)]
         dim2 += c
@@ -104,7 +117,7 @@ function GatherOffsets(items, counts, csc = cumsum0(counts))
     ptr_counts = pointer(counts)
     sizeof_I = sizeof(eltype(counts))
     if count_has_remainder
-        ptr_counts += offset*sizeof_I
+        ptr_counts -= offset*sizeof_I
     end
     offset_ptr = reinterpret(Ptr{Int}, pointer(offsets))
     ind = 1
@@ -112,11 +125,11 @@ function GatherOffsets(items, counts, csc = cumsum0(counts))
     # @show offset, length(items)
     for s ∈ (!count_has_remainder):count_reps
         if s == 0
-            count_inds = ntuple(w -> (w + offset) > 0 ? csc[w + offset] : -99999, Val(W64))
-            mask = VectorizationBase.max_mask(Float64) ⊻ ((one(MASK_TYPE) << (W64-1)) - one(MASK_TYPE))
+            count_inds = ntuple(w -> (w - offset) > 0 ? csc[w - offset] : -99999, Val(W64))
+            mask = VectorizationBase.max_mask(Float64) ⊻ ((one(MASK_TYPE) << (offset)) - one(MASK_TYPE))
             count_vec = vload( Vint, ptr_counts, mask )
         else
-            count_inds = ntuple(w -> csc[w + offset + (s << Wshift64)], Val(W64))
+            count_inds = ntuple(w -> csc[w - offset + (s << Wshift64)], Val(W64))
             count_vec = vload( Vint, ptr_counts )
         end
         # @show count_inds
@@ -152,14 +165,18 @@ function GatherOffsets(items, counts, csc = cumsum0(counts))
     GatherOffsets( offsets, masks, count_per_lane, offset ) # increment )
 end
 
- 
+
+
+
 """
 Represents a network as a series of offsets.
 """
-struct GatherNetwork <: AbstractNetwork
-    α::GatherOffsets
-    δ::GatherOffsets
+struct GatherNetwork{R} <: AbstractNetwork
+    α::GatherOffsets{R}
+    δ::GatherOffsets{Nothing}
 end
+
+# function Base.getindex(gn::GatherNetwork
 
 function count_unique(v::AbstractVector{T}) where {T}
     d = Dict{T,Int}()
@@ -196,9 +213,9 @@ function GatherNetwork(studies, arms, doses...)
     ss = sort!(
         SortingSet(copy(studies), copy(arms), copy.(doses)),
         lt = (s,a) -> isless( # More frequently included treatments (arm freq) go first 
-            (arms_per_study[s[1]],s[1],-arm_frequency[s[2]],s[2]),
-            (arms_per_study[a[1]],a[1],-arm_frequency[a[2]],a[2])
-        )
+                              (arms_per_study[s[1]],s[1],-arm_frequency[s[2]],s[2]),
+                              (arms_per_study[a[1]],a[1],-arm_frequency[a[2]],a[2])
+                              )
     )
     # @show arm_frequency
     study_map, study_count = count_order_mapping(arms_per_study, 0, rev = false)
@@ -224,14 +241,27 @@ function GatherNetwork(studies, arms, doses...)
         # o gives the arm
         push!(ad[o+1], k-1)
     end
-    adp = vcat(ad...)
+    adp = vcat(reverse!(ad)...)
     # @show extrema(adp)
-    arm_offsets = GatherOffsets( adp, arm_count[2:end] )
+    # @show arm_count
+    arm_offsets = GatherOffsets( adp, reverse!(arm_count[2:end]) )
     # arm_offsets = GatherOffsets( vcat(ad...), arm_count )
 
     GatherNetwork( study_offsets, arm_offsets ), ss.z
 end
 
+function GatherNetwork( study_offsets, arm_offsets )
+    reps = count_unique( study_offsets.nreps )
+    Rv = sort(keys(reps))
+    R = tuple(Rv...)
+    repcounts = [reps[r] for r ∈ Rv]
+    GatherNetwork{R}(
+        GatherOffsets{R}( # Is this some kind of horrible abuse? nreps means something different in both instances.
+            study_offsets.offsets, study_offsets.masks, repcounts, study_offsets.offset
+        ),
+        arm_offsets
+    )
+end
 
 abstract type AbstractFixedEffect{S, P, T, L} <: AbstractNetworkEffect{P, T, L} end
 abstract type AbstractRandomEffect{P, T, L} <: AbstractNetworkEffect{P, T, L} end
@@ -284,10 +314,50 @@ const SUPPORTED_TRANSFORMS = Dict{Symbol,Int}(
 )
 func_type_to_symbol(@nospecialize(f::Type{<:Function})) =  Symbol(string(f)[8:end-1])
 
+function gather_fixed_effect_differences()
+
+end
+"""
+Quote assumes we have already loaded masks and offsets.
+Identity (no) transform between differencing and hierarchical parameters.
+"""
+function gather_random_effect_differences(R, ptrsym, baselinesym, partial = false)
+    q = quote
+        effectsbase = gather(ptrsym + offsets_1, mask_1)
+        ptrsym += 8W64
+        base = vload(Vec{$W64,Float64}, baselinesym, $(VectorizationBase.max_mask(Float64)) ⊻ (one(MASK_TYPE) << go.offset - one(MASK_TYPE) ))
+        base += 8W64#
+    end
+    for r ∈ 2:R
+        qr = quote
+            $(Symbol(:diff_,r)) = gather(ptrsym + $(Symbol(:offsets_,r)), $(:mask_,r))
+            ptrsym += 8W64
+        end
+        push!(q.args, qr)
+    end
+    q
+end
+function gather_fixed_effect_differences(R, ptrsym, baselinesym, partial = false)
+    q = quote
+
+    end
+end
+function setup_iteration(R)
+    q = quote end
+    for r ∈ 1:R
+        push!(q.args, :($(Symbol(:mask_,r)) = VectorizationBase.load(mask_ptr); mask_ptr += 1))
+        push!(q.args, :($(Symbol(:offsets_,r)) = vload(Vec{$W64,Int}, offset_ptr); offset_ptr += $(W64*sizeof(Int))))
+    end
+    q
+end
+function gather_network_meta_analysis_quote()
+    
+end
+
 """
 
 """
-function network_meta_analysis_quote(effects, differences, network, transforms, sptr::Bool = true, partial::Bool = true)
+function network_meta_analysis_quote(effects, differences, network, transforms; sptr::Bool = true, partial::Bool = false)
     effects_is_tuple = effects <: Tuple
     if effects_is_tuple
         israndom = Bool[ e <: AbstractRandomEffect for e in effects.parameters ]

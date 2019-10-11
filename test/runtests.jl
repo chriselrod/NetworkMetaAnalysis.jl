@@ -53,7 +53,7 @@ function generate_mbnma_data(
     end
     responses, RaggedMatrix(treatments,coloffsets,collengths,maxarms), doses, em, ed50
 end
-resp,treat,dose,em,ed50 = generate_mbnma_data(80, 2, 8, 12);
+resp,treat,dose,em,ed50 = generate_mbnma_data(80, 2, 8, 13);
 
 function study_v(study_counts)
     studies = similar(study_counts, sum(study_counts))
@@ -71,9 +71,20 @@ end
 
 studies = study_v(treat.column_lengths); studies'
 treat.data'
-
+extrema(treat.data)
 # include("/home/c285497/.julia/dev/NetworkMetaAnalysis/src/NetworkMetaAnalysis.jl")
 
 gn, (d2,r2) = NetworkMetaAnalysis.GatherNetwork(studies, treat.data, dose, resp);
+
+gn.α.offsets
+gn.α.masks[1] |> bitstring
+gn.α.masks[2] |> bitstring
+gn.α.nreps
+extrema(gn.α.offsets)
+
+gn.δ.offsets
+gn.δ.masks[1] |> bitstring
+gn.δ.masks[2] |> bitstring
+gn.δ.nreps'
 
 

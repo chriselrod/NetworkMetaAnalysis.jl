@@ -69,9 +69,9 @@ end
 # counts are counts of the things you wish to load into registers.
 # """
 function GatherOffsets(items, counts, csc = cumsum0(counts))
-    @show items'
-    @show counts'
-    @show csc
+    # @show items'
+    # @show counts'
+    # @show csc
     ncounts = length(counts)
     count_rem = ncounts & (W64-1)
     count_reps = ncounts >>> Wshift64
@@ -108,21 +108,24 @@ function GatherOffsets(items, counts, csc = cumsum0(counts))
     end
     offset_ptr = reinterpret(Ptr{Int}, pointer(offsets))
     ind = 1
-    @show !count_has_remainder, count_reps
+    # @show !count_has_remainder, count_reps
+    # @show offset, length(items)
     for s ∈ (!count_has_remainder):count_reps
         if s == 0
-            count_inds = ntuple(w -> (w + offset) > 0 ? csc[w + offset] : 0, Val(W64))
+            count_inds = ntuple(w -> (w + offset) > 0 ? csc[w + offset] : -99999, Val(W64))
             mask = VectorizationBase.max_mask(Float64) ⊻ ((one(MASK_TYPE) << (W64-1)) - one(MASK_TYPE))
             count_vec = vload( Vint, ptr_counts, mask )
         else
             count_inds = ntuple(w -> csc[w + offset + (s << Wshift64)], Val(W64))
             count_vec = vload( Vint, ptr_counts )
         end
-        @show count_inds
+        # @show count_inds
         maxcount = count_per_lane[s + count_has_remainder]
+        # @show count_vec
         for a ∈ 1:maxcount
-            @show a, ind, maxcount, s
+            # @show a, ind, maxcount, s
             mask = SIMDPirates.vgreater_or_equal_mask( count_vec, vbroadcast(Vint, a) )
+            # @show bitstring(mask)
             # Fill in offset_α
             for w ∈ 0:W64-1
                 flag = one(MASK_TYPE) << w
@@ -213,13 +216,18 @@ function GatherNetwork(studies, arms, doses...)
     # Need to construct study_offset_vec like the arms above; -1 indicates skipping.
     
     ad = [ sizehint!(Int[], c) for c ∈ arm_count ]
-    for k ∈ 1:length(study_offsets.offset)
-        o = study_offsets.offset[k]
+    # @show study_offsets.offsets'
+    # @show arm_count'
+    for k ∈ 1:length(study_offsets.offsets)
+        o = study_offsets.offsets[k]
         o < 0 && continue
         # o gives the arm
         push!(ad[o+1], k-1)
     end
-    arm_offsets = GatherOffsets( vcat(ad...), arm_count )
+    adp = vcat(ad...)
+    # @show extrema(adp)
+    arm_offsets = GatherOffsets( adp, arm_count[2:end] )
+    # arm_offsets = GatherOffsets( vcat(ad...), arm_count )
 
     GatherNetwork( study_offsets, arm_offsets ), ss.z
 end

@@ -16,7 +16,7 @@ exit()
 
 @time using NetworkMetaAnalysis
 
-using PaddedMatrices, Random, StructuredMatrices
+@time using PaddedMatrices, Random, StructuredMatrices
 using StructuredMatrices: RaggedMatrix
 
 emax(a, em, ed50) = em * a / (a + ed50)
@@ -40,10 +40,6 @@ function generate_mbnma_data(
     end
     responses = Vector{Float64}(undef, length(treatments))
     doses = similar(responses)
-    # doses = randexp(length(treatments)) .* 10
-    # doses .+= randexp!(responses)
-    # doses .+= randexp!(responses)
-    # doses .+= randexp!(responses)
     i = 1
     for n in 1:Ntrials
         mun = 0.5randn()
@@ -72,11 +68,12 @@ function study_v(study_counts)
     studies
 end
 
+
 studies = study_v(treat.column_lengths); studies'
 treat.data'
 
 # include("/home/c285497/.julia/dev/NetworkMetaAnalysis/src/NetworkMetaAnalysis.jl")
 
-gn, (d2,r2) = NetworkMetaAnalysis.GatherNetwork(studies, treat.data, (dose,resp));
+gn, (d2,r2) = NetworkMetaAnalysis.GatherNetwork(studies, treat.data, dose, resp);
 
 

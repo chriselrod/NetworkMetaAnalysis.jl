@@ -12,6 +12,8 @@ abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFi
 const W64, Wshift64 = VectorizationBase.pick_vector_width_shift(Float64)
 const MASK_TYPE = VectorizationBase.mask_type(Float64) # UInt8, unless we get something like avx1024.
 
+@inline smask(r) = VectorizationBase.max_mask(Float64) ⊻ ( (one(MASK_TYPE) << (r & MASK_TYPE(8sizeof(MASK_TYPE)-1))) - one(MASK_TYPE))
+
 """
 Represents a network as a ragged matrix.
 """
@@ -133,6 +135,13 @@ end
 @generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N, outtransforms::OT) where {E,D,N,IT,OT}
     network_meta_analysis_quote(E, D, N, T, sptr = true)
 end
+
+
+include("functions.jl")
+include("gather_fixed_effects.jl")
+# include("gather_random_effects.jl")
+include("gather_network.jl")
+
 
 @def_stackpointer_fallback MetaAnalysis ∂MetaAnalysis
 function __init__()

@@ -33,14 +33,14 @@ struct GatherOffsets{R}
     offsets::Matrix{Int}#Vector{NTuple{W64,Core.VecElement{Int}}}
     masks::Vector{MASK_TYPE}
     nreps::Vector{Int}
-    offset::Int # = rem - W
+    lastlen::Int
     # increment::Vector{Int}
 end
 
 function GatherOffsets(
     offsets::Matrix{Int}, masks::Vector{MASK_TYPE}, nreps::Vector{Int}, offset::Int
 )
-    GatherOffsets{nothing}(offsets, masks, nreps, offset)
+    GatherOffsets{Nothing}(offsets, masks, nreps, offset)
 end
 
 function cumsum0(x::AbstractArray{T}) where {T}
@@ -61,10 +61,9 @@ end
 
 # counts are counts of the things you wish to load into registers.
 # """
-function GatherOffsets(items, counts, csc = cumsum0(counts))# where {R}
-    # @show items'
-    # @show counts'
-    # @show csc
+function GatherOffsets(items, counts, csc = cumsum0(counts))
+    # @show counts
+    # @show sum(counts)
     ncounts = length(counts)
     count_rem = ncounts & (W64-1)
     count_reps = ncounts >>> Wshift64
@@ -72,59 +71,47 @@ function GatherOffsets(items, counts, csc = cumsum0(counts))# where {R}
     count_has_remainder = count_rem != 0
     if count_has_remainder
         count_per_lane = Vector{Int}(undef, count_reps + 1)
-        dim2 = counts[count_rem]
-        count_per_lane[1] = dim2
-        # offset = count_rem - W64
+        dim2 = counts[1 + (count_reps << Wshift64)]
+        count_per_lane[end] = dim2
     else
         count_per_lane = Vector{Int}(undef, count_reps)
         dim2 = 0
-        # offset = 0
     end
-    offset = W64 - count_rem
-    for i ∈ 1:count_reps
-        c = counts[count_rem + (i << Wshift64)]
+#    offset = W64 - count_rem
+    for i ∈ 0:count_reps-1
+        c = counts[1 + (i << Wshift64)]
         dim2 += c
-        count_per_lane[i + count_has_remainder] = c
+        count_per_lane[i+1] = c
     end
     
     Vf64 = Vec{W64,Float64}
     Vint = Vec{W64,Int}
 
-    # increment = Vector{Int}(undef, dim2+1); increment[1] = offset
-    # offsets = Vector{NTuple{W64,Core.VecElement{Int}}}(undef, dim2) # gives offsets for vectorizing studies
     offsets = fill(-Int(999), W64, dim2) # May not need mask vector? mask = offsets >= 0
     masks = Vector{MASK_TYPE}(undef, dim2)
     ptr_counts = pointer(counts)
     sizeof_I = sizeof(eltype(counts))
-    if count_has_remainder
-        ptr_counts -= offset*sizeof_I
-    end
     offset_ptr = reinterpret(Ptr{Int}, pointer(offsets))
     ind = 1
-    # @show !count_has_remainder, count_reps
-    # @show offset, length(items)
-    for s ∈ (!count_has_remainder):count_reps
-        if s == 0
-            count_inds = ntuple(w -> (w - offset) > 0 ? csc[w - offset] : -99999, Val(W64))
-            mask = VectorizationBase.max_mask(Float64) ⊻ ((one(MASK_TYPE) << (offset)) - one(MASK_TYPE))
+    # for s ∈ (!count_has_remainder):count_reps
+    for s ∈ 0:count_reps-1+count_has_remainder
+        if s == count_reps # remainder iteration
+            count_inds = ntuple(w -> w + (s << Wshift64) > length(csc) ? -999 : csc[w + (s << Wshift64)], Val(W64))
+            # mask = VectorizationBase.max_mask(Float64) ⊻ ((one(MASK_TYPE) << (offset)) - one(MASK_TYPE))
+            mask = VectorizationBase.mask(Float64, count_rem)
             count_vec = vload( Vint, ptr_counts, mask )
         else
-            count_inds = ntuple(w -> csc[w - offset + (s << Wshift64)], Val(W64))
+            count_inds = ntuple(w -> csc[w + (s << Wshift64)], Val(W64))
             count_vec = vload( Vint, ptr_counts )
         end
-        # @show count_inds
-        maxcount = count_per_lane[s + count_has_remainder]
-        # @show count_vec
+        maxcount = count_per_lane[s + 1]
         for a ∈ 1:maxcount
-            # @show a, ind, maxcount, s
             mask = SIMDPirates.vgreater_or_equal_mask( count_vec, vbroadcast(Vint, a) )
-            # @show bitstring(mask)
             # Fill in offset_α
             for w ∈ 0:W64-1
                 flag = one(MASK_TYPE) << w
                 if (mask & flag) != zero(MASK_TYPE) # arm present
                     i = count_inds[w+1]
-                    # @show i
                     count_inds = Base.setindex(count_inds, i+1, w+1)
                     itemsᵢ = items[i+1]
                     # Sentinel value; this is a baseline / something we do not load -> set corresponding mask to 0
@@ -142,7 +129,9 @@ function GatherOffsets(items, counts, csc = cumsum0(counts))# where {R}
         end
         ptr_counts += W64 * sizeof_I
     end
-    GatherOffsets( offsets, masks, count_per_lane, offset ) # increment )
+    # @show offsets
+    # @show size(offsets)
+    GatherOffsets( offsets, masks, count_per_lane, count_rem )
 end
 
 
@@ -193,12 +182,12 @@ function GatherNetwork(studies, arms, doses...)
     ss = sort!(
         SortingSet(copy(studies), copy(arms), copy.(doses)),
         lt = (s,a) -> isless( # More frequently included treatments (arm freq) go first 
-                              (arms_per_study[s[1]],s[1],-arm_frequency[s[2]],s[2]),
-                              (arms_per_study[a[1]],a[1],-arm_frequency[a[2]],a[2])
+                              (-arms_per_study[s[1]],s[1],-arm_frequency[s[2]],s[2]),
+                              (-arms_per_study[a[1]],a[1],-arm_frequency[a[2]],a[2])
                               )
     )
     # @show arm_frequency
-    study_map, study_count = count_order_mapping(arms_per_study, 0, rev = false)
+    study_map, study_count = count_order_mapping(arms_per_study, 0, rev = true)#false)
     arm_map, arm_count = count_order_mapping(arm_frequency, -1, rev = true)
 
     # @show typeof(ss)
@@ -211,33 +200,40 @@ function GatherNetwork(studies, arms, doses...)
     # @show count_unique(arms)
     study_offsets = GatherOffsets( arms, study_count )
     # Need to construct study_offset_vec like the arms above; -1 indicates skipping.
-    
-    ad = [ sizehint!(Int[], c) for c ∈ arm_count ]
+    # @show sum(arm_count)
+    # @show sum(study_offsets.offsets .>= 0)
+    # @show arm_count
+    ad = [ sizehint!(Int[], arm_count[c]) for c ∈ 2:length(arm_count) ]
     # @show study_offsets.offsets'
     # @show arm_count'
+    # @show study_offsets.offsets
     for k ∈ 1:length(study_offsets.offsets)
         o = study_offsets.offsets[k]
         o < 0 && continue
         # o gives the arm
         push!(ad[o+1], k-1)
     end
-    adp = vcat(reverse!(ad)...)
+    # @show length.(ad)
+    # @show ad
+    adp = vcat(ad...)
     # @show extrema(adp)
     # @show arm_count
-    arm_offsets = GatherOffsets( adp, reverse!(arm_count[2:end]) )
+    # @show length(adp)
+    arm_offsets = GatherOffsets( adp, arm_count[2:end] ) 
     # arm_offsets = GatherOffsets( vcat(ad...), arm_count )
-
-    GatherNetwork( study_offsets, arm_offsets ), ss.z
+    
+    GatherNetwork_unstable( study_offsets, arm_offsets ), ss.z
 end
 
-function GatherNetwork( study_offsets, arm_offsets )
+function GatherNetwork_unstable( study_offsets, arm_offsets )
+    # println("In GathNet.")
     reps = count_unique( study_offsets.nreps )
-    Rv = sort(keys(reps))
+    Rv = sort([k for k ∈ keys(reps)], rev = true)
     R = tuple(Rv...)
     repcounts = [reps[r] for r ∈ Rv]
     GatherNetwork{R}(
-        GatherOffsets{R}( # Is this some kind of horrible abuse? nreps means something different in both instances.
-            study_offsets.offsets, study_offsets.masks, repcounts, study_offsets.offset
+        GatherOffsets{R}( 
+            study_offsets.offsets, study_offsets.masks, repcounts, study_offsets.lastlen
         ),
         arm_offsets
     )
@@ -268,7 +264,7 @@ function setup_iteration(R)
 end
 
 function gather_effects(R, ptrsym, diffsym)
-    diffsym_ = Symbol(diffsym, : _)
+    diffsym_ = Symbol(diffsym, :_)
     quote
         $([:($(Symbol(diffsym_,r)) = gather($ptrsym + $(Symbol(:offsets_,r)), $(Symbol(:mask_,r)))) for r ∈ 1:R]...)
     end
@@ -294,7 +290,6 @@ function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments,
         end
     end
 end
-
 
 
 

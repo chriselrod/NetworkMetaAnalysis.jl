@@ -22,29 +22,6 @@ struct RaggedNetwork <: AbstractNetwork
 end
 
 
-abstract type AbstractFixedEffect{S, P, T, L} <: AbstractNetworkEffect{P, T, L} end
-abstract type AbstractRandomEffect{P, T, L} <: AbstractNetworkEffect{P, T, L} end
-struct FixedEffectM{S, P, T, L} <: AbstractFixedEffect{S, P, T, L}
-    effect::FixedSizeVector{P,T,L}
-    μ::FixedSizeVector{S,T,S}
-    σᵦ::T
-end
-struct FixedEffect{S, P, T, L} <: AbstractFixedEffect{S, P, T, L}
-    effect::PtrVector{P,T,L,false}
-    μ::PtrVector{S,T,S}
-    σᵦ::T
-end
-struct RandomEffectM{P, T, L} <: AbstractRandomEffect{P, T, L}
-    effect::FixedSizeVector{P,T,L}
-    σₑ::T
-    σᵦ::T
-end
-struct RandomEffect{P, T, L} <: AbstractRandomEffect{P, T, L}
-    effect::PtrVector{P,T,L,false}
-    σₑ::T
-    σᵦ::T
-end
-
 function ragged_network_meta_analysis_quote(
     israndom::Vector{Bool}, nmodelparams::Int, ntreatments::Int, (efitp, diitp, tritp)::NTuple{3,Bool},
     transform_v::Vector{Symbol}, arities::Vector{Int}, T, sptr::Bool, partial::Bool
@@ -138,9 +115,15 @@ end
 
 
 include("functions.jl")
+include("fixed_effects.jl")
 include("gather_fixed_effects.jl")
+# include("random_effects.jl")
 # include("gather_random_effects.jl")
 include("gather_network.jl")
+
+# include("ragged_fixed_effects.jl")
+# include("ragged_random_effects.jl")
+# include("ragged_network.jl")
 
 
 @def_stackpointer_fallback MetaAnalysis ∂MetaAnalysis

@@ -190,37 +190,42 @@ function GatherNetwork(studies, arms, doses...)
     study_map, study_count = count_order_mapping(arms_per_study, 0, rev = true)#false)
     arm_map, arm_count = count_order_mapping(arm_frequency, -1, rev = true)
 
-    # @show typeof(ss)
-    # @show typeof(ss.x), typeof(study_map)
     studies = [study_map[x] for x ∈ ss.x]
     arms = [arm_map[y] for y ∈ ss.y]
     # studies and arms now have the correct ids / names.
-    # @show studies'
-    # @show arms'
-    # @show count_unique(arms)
     study_offsets = GatherOffsets( arms, study_count )
     # Need to construct study_offset_vec like the arms above; -1 indicates skipping.
-    # @show sum(arm_count)
-    # @show sum(study_offsets.offsets .>= 0)
-    # @show arm_count
     ad = [ sizehint!(Int[], arm_count[c]) for c ∈ 2:length(arm_count) ]
-    # @show study_offsets.offsets'
-    # @show arm_count'
-    # @show study_offsets.offsets
-    for k ∈ 1:length(study_offsets.offsets)
-        o = study_offsets.offsets[k]
-        o < 0 && continue
-        # o gives the arm
-        push!(ad[o+1], k-1)
+    # for k ∈ 1:length(study_offsets.offsets)
+        # o = study_offsets.offsets[k]
+        # o < 0 && continue
+        # # o gives the arm
+        # push!(ad[o+1], k-1)
+    # end
+    ind = 0
+    jnd = 1
+#    arm_counts = Vector{Int}(undef, length(ad))
+    for a ∈ 1:length(study_offsets.nreps)
+        if a == length(study_offsets.nreps) && study_offsets.lastlen > 0
+            ind += study_offsets.lastlen
+        else
+            ind += W64
+        end
+        jnd += 1
+        for r ∈ 2:study_offsets.nreps[a]
+            for w ∈ 1:W64
+                o = study_offsets.offsets[w,jnd]
+                o < 0 && continue
+                push!(ad[o+1], ind)
+                ind += 1
+            end
+            jnd += 1
+        end
     end
-    # @show length.(ad)
-    # @show ad
+    arm_counts = length.(ad)
+    # @show arm_counts
     adp = vcat(ad...)
-    # @show extrema(adp)
-    # @show arm_count
-    # @show length(adp)
-    arm_offsets = GatherOffsets( adp, arm_count[2:end] ) 
-    # arm_offsets = GatherOffsets( vcat(ad...), arm_count )
+    arm_offsets = GatherOffsets( adp, arm_counts )#[2:end] ) 
     
     GatherNetwork_unstable( study_offsets, arm_offsets ), ss.z
 end
@@ -259,6 +264,7 @@ function setup_iteration(R)
     for r ∈ 1:R
         push!(q.args, :($(Symbol(:mask_,r)) = VectorizationBase.load(mask_ptr); mask_ptr += 1))
         push!(q.args, :($(Symbol(:offsets_,r)) = vload(Vec{$W64,Int}, offset_ptr); offset_ptr += $(W64*sizeof(Int))))
+        r > 1 && push!(q.args, :($(Symbol(:maskcount_,r)) = 8count_ones($(Symbol(:mask_,r))))) # move one byte per 1-bit
     end
     q
 end
@@ -270,8 +276,8 @@ function gather_effects(R, ptrsym, diffsym)
     end
 end
 
-function gather_network_quote_for_arm_length()
-
+function gather_network_quote_for_arm_length(R)
+    
 end
 
 

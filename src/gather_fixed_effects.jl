@@ -21,7 +21,7 @@ function gather_fixed_effects(R, ptrsym, baseptr, basesym, diffsym, effectsym, p
     end
     append!(q.args, q2.args)
     for r ∈ 2:R
-        push!(q.args, :($(Symbol(effect_, r)) = vadd($(Symbol(diff_, r)), $basesym)))
+        push!(q.args, :( $(Symbol(effect_, r)) = vadd($(Symbol(diff_, r)), $basesym) ))
     end
     q
 end
@@ -30,12 +30,12 @@ function store_fixed_effect(R, ptrfixed, effectsym, maskfirst = false)
     effect_ = Symbol(effectsym, :_)
     q = if maskfirst
         quote
-            vstore!($ptrfixed, $(Symbol(effect_,1)), (one(MASK_TYPE) << go.lastlen) - one(MASK_TYPE) )
+            vstore!( $ptrfixed, $(Symbol(effect_,1)), (one(MASK_TYPE) << go.lastlen) - one(MASK_TYPE) )
             $ptrfixed += 8 * go.lastlen
         end
     else
         quote
-            vstore!($ptrfixed, $(Symbol(effect_,1))); $ptrfixed += 8*$W64
+            vstore!( $ptrfixed, $(Symbol(effect_,1)) ); $ptrfixed += 8*$W64
         end
     end
     push!(q.args, :(vstore!($ptrfixed, $(Symbol(effect_,r)), $(Symbol(:mask_,r))); $ptrfixed += 8*$W64))

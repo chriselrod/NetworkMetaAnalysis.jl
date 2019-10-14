@@ -1,14 +1,20 @@
-@inline function normal_lpdf(y, μ, τ, logτ)
-    z = vsub(y, μ)
-    vfmadd(τ, vmul(z,z), logτ)
+
+struct Eₘₐₓ
+
 end
 
-@inline function ∂normal_lpdf(y, μ, τ, logτ, σ²)
-    z = vsub(y, μ)
-    zτ = vmul(z,τ)
-    t = vfmadd(z, zτ, logτ)
-    dtdy = zτ
-    dtdμ = vsub(zτ)
-    dtdτ = vfmadd(z, z, σ²)
-    t, dtdy, dtdμ, dtdτ
+@genereated function ProbabilityDistributions.Normal(
+    data::AbstractVector{T},
+    μ::T
+    emax::Eₘₐₓ,
+    τ::AbstractVector{T},
+    ::Val{track} = Val((false,true,false))
+) where {T,track}
+    track_data, track_emax, track_τ = track
+    @assert !(track_data | track_τ) # for now; ought to implement later.
+
+    
+    
 end
+
+

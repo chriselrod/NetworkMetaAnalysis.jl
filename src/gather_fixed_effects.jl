@@ -3,12 +3,12 @@
 """
 Calculates effects from differences.
 """    
-function gather_fixed_effects(R, ptrsym, baseptr, basesym, diffsym, effectsym, partial = false, maskfirst = false)
+function gather_fixed_effects(R, ptrsym, baseptr, basesym, diffsym, effectsym, partial = false, masklast = false, S)
     diff_ = Symbol(diffsym, :_)
     effect_ = Symbol(effectsym, :_)
-    q = if maskfirst
+    q = if masklast
         quote
-            $(Symbol(effect_,1)) = vload(Vec{$W64,Float64}, $baseptr, smask(go.offset))
+            $(Symbol(effect_,1)) = vload(Vec{$W64,Float64}, $baseptr, $(VectorizationBase.mask(Float64, S & (W64-1))))
         end
     else
         quote
@@ -30,8 +30,8 @@ function store_fixed_effect(R, ptrfixed, effectsym, maskfirst = false)
     effect_ = Symbol(effectsym, :_)
     q = if maskfirst
         quote
-            vstore!( $ptrfixed, $(Symbol(effect_,1)), (one(MASK_TYPE) << go.lastlen) - one(MASK_TYPE) )
-            $ptrfixed += 8 * go.lastlen
+            vstore!( $ptrfixed, $(Symbol(effect_,1)), maskf)
+            $ptrfixed += 8 * maskfcount
         end
     else
         quote

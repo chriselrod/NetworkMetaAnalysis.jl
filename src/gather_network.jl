@@ -118,7 +118,7 @@ function GatherOffsets(items, counts, csc = cumsum0(counts))
                     if itemsᵢ < 0
                         mask ⊻= flag
                     else
-                        VectorizationBase.store!( offset_ptr + w*sizeof(Int), itemsᵢ )
+                        VectorizationBase.store!( offset_ptr + w*sizeof(Int), itemsᵢ << 3)
                     end
                 end
             end
@@ -216,7 +216,7 @@ function GatherNetwork(studies, arms, doses...)
             for w ∈ 1:W64
                 o = study_offsets.offsets[w,jnd]
                 o < 0 && continue
-                push!(ad[o+1], ind)
+                push!(ad[(o>>3)+1], ind)
                 ind += 1
             end
             jnd += 1
@@ -276,15 +276,86 @@ function gather_effects(R, ptrsym, diffsym)
     end
 end
 
-function gather_network_quote_for_arm_length(R)
-    
+function transformsym(R, sym, f)
+    g = get(LoopVectorization.SLEEFPiratesDict, f, f)
+    sym_ = Symbol(sym, :_)
+    q = quote end
+    for r ∈ 1:R
+        sym_r = Symbol(sym_,r)
+        push!(q.args, :($sym_r = $g($sym_r)))
+    end
+    q
 end
 
 
-function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, arm_lengths, tuple_checks, transform_v, arities, T, sptr, partial)
-    q = quote end
+function gather_network_quote_for_arm_length(
+    i, R, diffsyms, diffptrs, effectsyms, effectptrs, basesyms, baseptrs, israndom, transform_in, transform_out, sptr, partial, last, S
+)
+    q = setup_iteration(R)
+    for i ∈ eachindex(diffsyms)
+        push!(q.args, gather_effects(R, diffptrs[i], diffsyms[i]))
+    end
+    for i ∈ eachindex(transform_in)
+        transform = transform_in[i]
+        transform == :identity && continue
+        # push!(q.args, transformsym(R, ))
+        throw("Transform $transform not yet supported.")
+    end
+    for i ∈ eachindex(diffsyms)
+        if israndom[i]
+            push!(q.args, gather_random_effects(R, ptrsyms[i], effectptrs[i], effectsyms[i], diffsyms[i], partial, last))
+        else
+            push!(q.args, gather_fixed_effects(R, ptrsyms[i], baseptrs[i], basesyms[i], diffsyms[i], effectsyms[i], partial, last, S))
+        end
+    end
+    for i ∈ eachindex(transform_out)
+        transform = transform_out
+        transform == :identity && continue
+        push!(q.args, transformsym(R, effectsyms[i], transform))
+    end
+    for i ∈ eachindex(diffsyms)
+        if israndom[i]
+
+        else
+            push!(q.args, store_fixed_effect(R, effectptrs[i], effectsyms[i], last))
+        end
+    end
+    quote
+        @inbounds for $(gensym(:_)) ∈ repetitions[$i)
+            $q
+        end
+    end
+end
+
+
+function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, arm_lengths, tuple_checks, transform_in, transform_out, T, sptr, partial, S)
     diffsyms = [gensym(:diff) for i ∈ eachindex(israndom)]
-    diffptr = [Symbol(:diffptr_,i) for i ∈ eachindex(israndom)]
+    diffptrs = [gensym(:diffptr) for i ∈ eachindex(israndom)]
+    effectsyms = [gensym(:effect) for i ∈ eachindex(israndom)]
+    effectptrs = [gensym(:effectptr) for i ∈ eachindex(israndom)]
+    basesyms = [gensym(:base) for i ∈ eachindex(israndom)]
+    baseptrs = [gensym(:baseptr) for i ∈ eachindex(israndom)]
+    q = quote
+        network_offsets = network.α
+        maskfcount = network_offsets.lastlen
+        maskf = (one(MASK_TYPE) << (maskfcount)) - one(MASK_TYPE)
+        repetitions = network_offsets.nreps
+        mask_ptr = pointer(network_offsets.masks)
+        offset_ptr = pointer(network_offsets.offsets)
+        $([:(@inbounds $(diffptrs[i]) = pointer(params[$i].δ)) for i ∈ eachindex(israndom)]...)
+        $([:(@inbounds $(effectptr[i]) = pointer(effects[$i])) for i ∈ eachindex(israndom)]...)
+    end
+    for i ∈ eachindex(israndom)
+        if !israndom[i]
+            push!(q.args, :(@inbounds $(baseptrs[i]) = pointer(params[$i].μ)))
+        end
+    end
+    for ali ∈ eachindex(arm_lengths)
+        qa = gather_network_quote_for_arm_length(
+            ali, al, diffsyms, diffptrs, effectsyms, effectptrs, basesyms, baseptrs, israndom, transform_in, transform_out, sptr, partial, ali == length(arm_lengths), S
+        )
+    end
+    
     for i ∈ eachindex(israndom)
         push!(q.args, setup_iteration(arm_lengths[i]))
         push!(q.args, gather_effects(arm_lengths[i], diffptr[i], diffsyms[i]))

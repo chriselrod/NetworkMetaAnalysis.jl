@@ -88,3 +88,12 @@ gn.δ.masks[2] |> bitstring
 gn.δ.nreps'
 
 
+
+
+
+
+
+MetaAnalysis((fe1,fe2),gn,(fep1,fep2),(identity,exp))
+
+
+

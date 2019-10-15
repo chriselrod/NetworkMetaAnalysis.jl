@@ -1,18 +1,21 @@
 module NetworkMetaAnalysis
 
-using VectorizationBase, SIMDPirates,
+using VectorizationBase, SIMDPirates, LoopVectorization,
     StackPointers, PaddedMatrices, ReverseDiffExpressionsBase
 
-export NetworkMetaAnalysis, RaggedNetwork, GatherNetwork
+export NetworkMetaAnalysis, RaggedNetwork, GatherNetwork,
+    FixedEffectParameters, FixedEffect,
+    MetaAnalysis, ∂MetaAnalysis
 
 abstract type AbstractNetwork end
-abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P, T, L} end
-@inline Base.pointer(ne::AbstractNetworkEffect) = pointer(ne.effect)
+abstract type AbstractNetworkEffect{T} <: DenseVector{T} end
+# abstract type AbstractNetworkEffect{P, T, L} <: PaddedMatrices.AbstractMutableFixedSizeVector{P, T, L} end
+# @inline Base.pointer(ne::AbstractNetworkEffect) = pointer(ne.effect)
 
 const W64, Wshift64 = VectorizationBase.pick_vector_width_shift(Float64)
 const MASK_TYPE = VectorizationBase.mask_type(Float64) # UInt8, unless we get something like avx1024.
 
-@inline smask(r) = VectorizationBase.max_mask(Float64) ⊻ ( (one(MASK_TYPE) << (r & MASK_TYPE(8sizeof(MASK_TYPE)-1))) - one(MASK_TYPE))
+# @inline smask(r) = VectorizationBase.max_mask(Float64) ⊻ ( (one(MASK_TYPE) << (r & MASK_TYPE(8sizeof(MASK_TYPE)-1))) - one(MASK_TYPE))
 
 """
 Represents a network as a ragged matrix.
@@ -113,6 +116,7 @@ end
     network_meta_analysis_quote(E, D, N, T, sptr = true)
 end
 
+function ∂MetaAnalysis end
 
 include("functions.jl")
 include("fixed_effects.jl")

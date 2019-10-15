@@ -97,3 +97,106 @@ MetaAnalysis((fe1,fe2),gn,(fep1,fep2),(identity,exp))
 
 
 
+
+using BenchmarkTools, SLEEFPirates
+function uexp(v1, v2, v3, v4)
+    v1 = SLEEFPirates.exp(v1)
+    v2 = SLEEFPirates.exp(v2)
+    v3 = SLEEFPirates.exp(v3)
+    v4 = SLEEFPirates.exp(v4)
+    (v1, v2, v3, v4)
+end
+function lexp(v1, v2, v3, v4)
+    v = (v1, v2, v3, v4)
+    @inbounds for i ∈ eachindex(v)
+        v = Base.setindex(v, SLEEFPirates.exp(v[i]), i)
+    end
+    v
+end
+function vaexp(v...)
+    @inbounds ntuple(i -> SLEEFPirates.exp(v[i]), length(v))
+end
+v1 = ntuple(Val(4)) do _ Core.VecElement(randn()) end
+v2 = ntuple(Val(4)) do _ Core.VecElement(randn()) end
+v3 = ntuple(Val(4)) do _ Core.VecElement(randn()) end
+v4 = ntuple(Val(4)) do _ Core.VecElement(randn()) end
+
+uexp(v1, v2, v3, v4)
+lexp(v1, v2, v3, v4)
+vaexp(v1, v2, v3, v4)
+
+@benchmark uexp($v1, $v2, $v3, $v4)
+@benchmark lexp($v1, $v2, $v3, $v4)
+@benchmark vaexp($v1, $v2, $v3, $v4)
+
+
+@code_native uexp(v1, v2, v3, v4)
+@code_native lexp(v1, v2, v3, v4)
+
+
+
+using SIMDPirates, VectorizationBase
+const W64, Wshift64 = VectorizationBase.pick_vector_width_shift(Float64)
+
+
+function expand_test!(expanded, mul, a, nreps)
+    ind = 1
+    @inbounds for i ∈ eachindex(a)
+        aᵢ = a[i]
+        for j ∈ 1:nreps[i]
+            expanded[ind] = aᵢ
+            ind += 1
+        end
+    end
+    t = vbroadcast(Vec{W64,Float64}, 0.0)
+    ptre = pointer(expanded); ptrm = pointer(mul)
+    for i ∈ 0:(length(expanded) >> Wshift64)-1
+        t = vfmadd(vload(Vec{W64,Float64}, ptre), vload(Vec{W64,Float64}, ptrm), t)
+        ptre += 8W64
+        ptrm += 8W64
+    end
+    t
+end
+function gather_test(mul, a, offs)
+    t = vbroadcast(Vec{W64,Float64}, 0.0)
+    ptra = pointer(a); ptrm = pointer(mul); ptri = pointer(offs)
+    for i ∈ 0:(length(mul)>>Wshift64)-1
+        vm = vload(Vec{W64,Float64}, ptrm)
+        va = gather(vadd(ptra, vload(Vec{W64,Int}, ptri)))
+        t = vfmadd(vm, va, t)
+        ptrm += 8W64
+        ptri += sizeof(Int)*W64
+    end
+    t
+end
+
+function calc_offs_from_nreps(nreps)
+    offs = Vector{Int}(undef, sum(nreps))
+    ind = 1
+    for i ∈ eachindex(nreps)
+        for _ ∈ 1:nreps[i]
+            offs[ind] = (i - 1) * sizeof(Int)
+            ind += 1
+        end
+    end
+    offs
+end
+
+nreps = rand(2:4, 50);
+a = randn(50);
+offs = calc_offs_from_nreps(nreps);
+mul = randn(length(offs));
+expanded = similar(mul);
+
+expand_test!(expanded, mul, a, nreps)
+gather_test(mul, a, offs)
+
+using BenchmarkTools
+
+@benchmark expand_test!($expanded, $mul, $a, $nreps)
+@benchmark gather_test($mul, $a, $offs)
+
+@code_native gather_test(mul, a, offs)
+
+
+

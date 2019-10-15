@@ -5,7 +5,7 @@ end
 
 @genereated function ProbabilityDistributions.Normal(
     data::AbstractVector{T},
-    μ::T
+    μ::T,
     emax::Eₘₐₓ,
     τ::AbstractVector{T},
     ::Val{track} = Val((false,true,false))

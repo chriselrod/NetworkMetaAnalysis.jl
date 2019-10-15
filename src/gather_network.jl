@@ -328,7 +328,7 @@ function gather_network_quote_for_arm_length(
 end
 
 
-function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, arm_lengths, tuple_checks, transform_in, transform_out, T, sptr, partial, S)
+function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, arm_lengths, tuple_checks, transform_in, transform_out, sptr, partial, S)
     diffsyms = [gensym(:diff) for i ∈ eachindex(israndom)]
     diffptrs = [gensym(:diffptr) for i ∈ eachindex(israndom)]
     effectsyms = [gensym(:effect) for i ∈ eachindex(israndom)]
@@ -354,18 +354,9 @@ function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments,
         qa = gather_network_quote_for_arm_length(
             ali, al, diffsyms, diffptrs, effectsyms, effectptrs, basesyms, baseptrs, israndom, transform_in, transform_out, sptr, partial, ali == length(arm_lengths), S
         )
+        push!(q.args, qa)
     end
-    
-    for i ∈ eachindex(israndom)
-        push!(q.args, setup_iteration(arm_lengths[i]))
-        push!(q.args, gather_effects(arm_lengths[i], diffptr[i], diffsyms[i]))
-        isr = israndom[i]
-        if isr
-            
-        else
-            
-        end
-    end
+    q
 end
 
 

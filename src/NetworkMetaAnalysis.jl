@@ -55,10 +55,7 @@ func_type_to_symbol(@nospecialize(f::Type{<:Function})) =  Symbol(string(f)[8:en
 
 
 
-"""
-
-"""
-function network_meta_analysis_quote(effects, differences, network, transforms; sptr::Bool = true, partial::Bool = false)
+function network_meta_analysis_quote(effects, network, params, transforms; sptr::Bool = true, partial::Bool = false)
     effects_is_tuple = effects <: Tuple
     if effects_is_tuple
         israndom = Bool[ e <: AbstractRandomEffect for e in effects.parameters ]
@@ -66,13 +63,10 @@ function network_meta_analysis_quote(effects, differences, network, transforms; 
         israndom = Bool[ e <: AbstractRandomEffect ]
     end
     neffects = length(israndom)
-    differences_is_tuple = differences <: Tuple
-    nmodelparams = differences_is_tuple ? length(differences.parameters) : 1
+    params_is_tuple = differences <: Tuple
+    nmodelparams = params_is_tuple ? length(params.parameters) : 1
     # Get the first two parameters of the MutableFixedSizeArray, they are Tuple{dims...}, eltype
-    # ntreatments_tup, T = (differences_is_tuple ? first(differences.parameters) : differences).parameters
-    ntreatments_tup = first((differences_is_tuple ? first(differences.parameters) : differences).parameters)
-    # Assume that length(ntreatments_tup.parameters) == 1, and extract the first element
-    ntreatments = first(ntreatments_tup.parameters)::Int
+    ntreatments = first((params_is_tuple ? first(params.parameters) : params).parameters)
     isragged = network <: RaggedNetwork
     transforms_is_tuple = false
     transform_v = if transforms === nothing
@@ -87,34 +81,56 @@ function network_meta_analysis_quote(effects, differences, network, transforms; 
     arities = getindex.(SUPPORTED_TRANSFORMS, transform_v)
     @assert arities == nmodelparams
     tuple_checks = (effects_is_tuple, differences_is_tuple, transforms_is_tuple)
+    constlengths = Vector{Int}(undef, nmodelparams)
+    for i ∈ 1:nmodelparams
+        # if effects is a tuple, extract ith type
+        efftupextract = effects_is_tuple ? effects.parameters[i] : effects
+        # type of the sized vector; if israndom, we already have it, if it is fixed, we have to extract first arg of (studies, fixed) tuple
+        typesizedvec = israndom[i] ? efftupextract : efftupextract.parameters[1]
+        # sized vectors have parametric type SizedParamType{Tuple{L}}; so we need to extract twice to reach L
+        constlengths[i] = typesizedvec.parametes[1].parameters[1]
+    end
     if isragged
-        ragged_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, tuple_checks, transform_v, arities, sptr, partial)
+        ragged_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, tuple_checks, transform_v, arities, sptr, partial, constlengths)
     else
         arm_lengths = [Int(r) for r ∈ first(network.parameters)]
-        gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, arm_lengths, tuple_checks, transform_v, arities, sptr, partial)
+        gather_network_meta_analysis_quote(
+            israndom, nmodelparams, ntreatments, arm_lengths, tuple_checks, transform_in, transforms_out, sptr, partial, constlengths
+        )
     end
 end
 
 
+# function network_meta_analysis_quote(E, N, P, T)
+# end
+                                  
+
 """
 α = FixedEffect(  baselines, δα )
 θ = RandomEffect( effects, δθ, stdev )
-(α,θ) ~ NetworkMetaAnalysis( network, transforms )
+(α,θ) ~ MetaAnalysis( network, EffectParams, transforms )
 
 How to pass in additional args?
 """
-@generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N) where {E,D,N}
-    network_meta_analysis_quote(E, D, N, nothing, sptr = true)
+@genertated function MetaAnalysis(effects::E, network::N, params::P, transforms::T = nothing) where {E,N,P,T}
+    network_meta_analysis_quote(E,N,P,T)
 end
-@generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N) where {E,D,IT,N}
-    network_meta_analysis_quote(E, D, N, nothing, sptr = true)
-end
-@generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N, outtransforms::OT) where {E,D,N <: AbstractNetwork,OT}
-    network_meta_analysis_quote(E, D, N, nothing, sptr = true)
-end
-@generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N, outtransforms::OT) where {E,D,N,IT,OT}
-    network_meta_analysis_quote(E, D, N, T, sptr = true)
-end
+# function MetaAnalysis(effects, network, params) where {E,N,P,T}
+    # MetaAnalysis(effects, network, params, ntuple(_ -> identity, length(effects)))
+# end
+
+# @generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N) where {E,D,N}
+    # network_meta_analysis_quote(E, D, N, nothing, sptr = true)
+# end
+# @generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N) where {E,D,IT,N}
+    # network_meta_analysis_quote(E, D, N, nothing, sptr = true)
+# end
+# @generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, network::N, outtransforms::OT) where {E,D,N <: AbstractNetwork,OT}
+    # network_meta_analysis_quote(E, D, N, nothing, sptr = true)
+# end
+# @generated function MetaAnalysis(sptr::StackPointer, effects::E, δ::D, intransforms::IT, network::N, outtransforms::OT) where {E,D,N,IT,OT}
+    # network_meta_analysis_quote(E, D, N, T, sptr = true)
+# end
 
 function ∂MetaAnalysis end
 

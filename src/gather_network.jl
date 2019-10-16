@@ -289,7 +289,7 @@ end
 
 
 function gather_network_quote_for_arm_length(
-    i, R, diffsyms, diffptrs, effectsyms, effectptrs, basesyms, baseptrs, israndom, transform_in, transform_out, sptr, partial, last, S
+    i, R, diffsyms, diffptrs, effectsyms, effectptrs, basesyms, baseptrs, israndom, transform_in, transform_out, sptr, partial, last, constlengths
 )
     q = setup_iteration(R)
     for i ∈ eachindex(diffsyms)
@@ -303,9 +303,9 @@ function gather_network_quote_for_arm_length(
     end
     for i ∈ eachindex(diffsyms)
         if israndom[i]
-            push!(q.args, gather_random_effects(R, ptrsyms[i], effectptrs[i], effectsyms[i], diffsyms[i], partial, last))
+            push!(q.args, gather_random_effects(R, ptrsyms[i], effectptrs[i], effectsyms[i], diffsyms[i], partial, last, constlengths[i]))
         else
-            push!(q.args, gather_fixed_effects(R, ptrsyms[i], baseptrs[i], basesyms[i], diffsyms[i], effectsyms[i], partial, last, S))
+            push!(q.args, gather_fixed_effects(R, ptrsyms[i], baseptrs[i], basesyms[i], diffsyms[i], effectsyms[i], partial, last, constlengths[i]))
         end
     end
     for i ∈ eachindex(transform_out)
@@ -328,7 +328,7 @@ function gather_network_quote_for_arm_length(
 end
 
 
-function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, arm_lengths, tuple_checks, transform_in, transform_out, sptr, partial, S)
+function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments, arm_lengths, tuple_checks, transform_in, transform_out, sptr, partial, constlengths)
     diffsyms = [gensym(:diff) for i ∈ eachindex(israndom)]
     diffptrs = [gensym(:diffptr) for i ∈ eachindex(israndom)]
     effectsyms = [gensym(:effect) for i ∈ eachindex(israndom)]
@@ -351,8 +351,9 @@ function gather_network_meta_analysis_quote(israndom, nmodelparams, ntreatments,
         end
     end
     for ali ∈ eachindex(arm_lengths)
+        last_arm = ali == length(arm_lengths)
         qa = gather_network_quote_for_arm_length(
-            ali, al, diffsyms, diffptrs, effectsyms, effectptrs, basesyms, baseptrs, israndom, transform_in, transform_out, sptr, partial, ali == length(arm_lengths), S
+            ali, al, diffsyms, diffptrs, effectsyms, effectptrs, basesyms, baseptrs, israndom, transform_in, transform_out, sptr, partial, last_arm, constlengths
         )
         push!(q.args, qa)
     end

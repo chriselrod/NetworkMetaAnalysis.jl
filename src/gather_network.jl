@@ -303,9 +303,9 @@ function gather_network_quote_for_arm_length(
     end
     for i ∈ eachindex(diffsyms)
         if israndom[i]
-            push!(q.args, gather_random_effects(R, ptrsyms[i], effectptrs[i], effectsyms[i], diffsyms[i], partial, last, constlengths[i]))
+            push!(q.args, gather_random_effects(R, ptrsyms[i], effectptrs[i], effectsyms[i], diffsyms[i], constlengths[i], partial, last))
         else
-            push!(q.args, gather_fixed_effects(R, ptrsyms[i], baseptrs[i], basesyms[i], diffsyms[i], effectsyms[i], partial, last, constlengths[i]))
+            push!(q.args, gather_fixed_effects(R, ptrsyms[i], baseptrs[i], basesyms[i], diffsyms[i], effectsyms[i], constlengths[i], partial, last))
         end
     end
     for i ∈ eachindex(transform_out)
@@ -321,7 +321,7 @@ function gather_network_quote_for_arm_length(
         end
     end
     quote
-        @inbounds for $(gensym(:_)) ∈ repetitions[$i)
+        @inbounds for $(gensym(:_)) ∈ repetitions[$i]
             $q
         end
     end

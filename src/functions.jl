@@ -3,7 +3,7 @@ struct Eₘₐₓ
 
 end
 
-@genereated function ProbabilityDistributions.Normal(
+@generated function ProbabilityDistributions.Normal(
     data::AbstractVector{T},
     μ::T,
     emax::Eₘₐₓ,

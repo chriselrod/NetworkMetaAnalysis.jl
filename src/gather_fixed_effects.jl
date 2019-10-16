@@ -3,7 +3,7 @@
 """
 Calculates effects from differences.
 """    
-function gather_fixed_effects(R, ptrsym, baseptr, basesym, diffsym, effectsym, partial = false, masklast = false, S)
+function gather_fixed_effects(R, ptrsym, baseptr, basesym, diffsym, effectsym, S, partial = false, masklast = false)
     diff_ = Symbol(diffsym, :_)
     effect_ = Symbol(effectsym, :_)
     q = if masklast

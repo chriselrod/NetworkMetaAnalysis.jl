@@ -1,7 +1,8 @@
 module NetworkMetaAnalysis
 
 using VectorizationBase, SIMDPirates, LoopVectorization,
-    StackPointers, PaddedMatrices, ReverseDiffExpressionsBase
+    StackPointers, PaddedMatrices, ReverseDiffExpressionsBase,
+    ProbabilityDistributions
 
 export NetworkMetaAnalysis, RaggedNetwork, GatherNetwork,
     FixedEffectParameters, FixedEffect,
@@ -112,7 +113,7 @@ end
 
 How to pass in additional args?
 """
-@genertated function MetaAnalysis(effects::E, network::N, params::P, transforms::T = nothing) where {E,N,P,T}
+@generated function MetaAnalysis(effects::E, network::N, params::P, transforms::T = nothing) where {E,N,P,T}
     network_meta_analysis_quote(E,N,P,T)
 end
 # function MetaAnalysis(effects, network, params) where {E,N,P,T}

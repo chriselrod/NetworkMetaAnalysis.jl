@@ -1,5 +1,5 @@
 
-const VectorOrDouble{T} = Union{T,<:AbstractFixedSizeVector{<:Any,T}}
+const VectorOrDouble{T} = Union{T,<:PaddedMatrices.AbstractFixedSizeVector{<:Any,T}}
 
 struct Eₘₐₓ{T,N<:AbstractNetwork,M<:VectorOrDouble{T},D<:VectorOrDouble{T},B<:Union{T,Nothing}}
     N::N

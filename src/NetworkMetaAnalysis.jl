@@ -135,12 +135,12 @@ end
 
 function ∂MetaAnalysis end
 
-include("functions.jl")
 include("fixed_effects.jl")
 include("gather_fixed_effects.jl")
 # include("random_effects.jl")
 # include("gather_random_effects.jl")
 include("gather_network.jl")
+include("functions.jl")
 
 # include("ragged_fixed_effects.jl")
 # include("ragged_random_effects.jl")

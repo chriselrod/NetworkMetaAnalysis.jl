@@ -44,15 +44,15 @@ function gather_network_meta_analysis_quote(
     
 end
 
-const SUPPORTED_TRANSFORMS = Dict{Symbol,Int}(
-    :ITP => 2,
-    :Eₘₐₓ => 2,
-    :exp => 1,
-    :identity => 1,
-    :* => 1,
-    :logistic => 1
-)
-func_type_to_symbol(@nospecialize(f::Type{<:Function})) =  Symbol(string(f)[8:end-1])
+# const SUPPORTED_TRANSFORMS = Dict{Symbol,Int}(
+    # :ITP => 2,
+    # :Eₘₐₓ => 2,
+    # :exp => 1,
+    # :identity => 1,
+    # :* => 1,
+    # :logistic => 1
+# )
+# func_type_to_symbol(@nospecialize(f::Type{<:Function})) =  Symbol(string(f)[8:end-1])
 
 
 

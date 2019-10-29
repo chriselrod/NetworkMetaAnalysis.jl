@@ -72,7 +72,7 @@ end
 studies = study_v(treat.column_lengths); studies'
 treat.data'
 extrema(treat.data)
-# include("/home/c285497/.julia/dev/NetworkMetaAnalysis/src/NetworkMetaAnalysis.jl")
+# include("~/.julia/dev/NetworkMetaAnalysis/src/NetworkMetaAnalysis.jl")
 
 gn, (d2,r2) = NetworkMetaAnalysis.GatherNetwork(studies, treat.data, dose, resp);
 
